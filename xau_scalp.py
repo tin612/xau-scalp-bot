@@ -18,6 +18,7 @@ import datetime
 import json
 import os
 import platform
+import tempfile
 import subprocess
 import sys
 import time
@@ -34,6 +35,8 @@ SL = float(os.environ.get("SL_DOLLARS", "3"))   # 2-5 range
 NEWS_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 NEWS_BEFORE = int(os.environ.get("NEWS_BEFORE_MIN", "30"))  # minutes before event
 NEWS_AFTER = int(os.environ.get("NEWS_AFTER_MIN", "15"))    # minutes after event
+NEWS_CACHE = os.path.join(tempfile.gettempdir(), "xau_news_cache.json")
+NEWS_TTL = 3600                                             # refetch feed at most hourly
 
 
 def ema(values, period):
@@ -196,11 +199,7 @@ def backtest(days=3):
     push_phone(title, body, actionable=True)
 
 
-def fetch_news():
-    # High-impact USD events this week from Forex Factory (gold is USD-priced).
-    req = urllib.request.Request(NEWS_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        raw = json.load(resp)
+def _parse_news(raw):
     out = []
     for e in raw:
         if e.get("impact") != "High" or e.get("country") != "USD":
@@ -211,6 +210,30 @@ def fetch_news():
             continue
         out.append((ts, e.get("title", "?")))
     return out
+
+
+def _read_cache():
+    with open(NEWS_CACHE) as f:
+        return _parse_news(json.load(f))
+
+
+def fetch_news():
+    # High-impact USD events (Forex Factory). Cached hourly to dodge 429 rate
+    # limits; on a fetch failure, fall back to the stale cache if we have one.
+    try:
+        if time.time() - os.path.getmtime(NEWS_CACHE) < NEWS_TTL:
+            return _read_cache()
+    except OSError:
+        pass
+    req = urllib.request.Request(NEWS_URL, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = json.load(resp)
+        with open(NEWS_CACHE, "w") as f:
+            json.dump(raw, f)
+        return _parse_news(raw)
+    except Exception:
+        return _read_cache()   # stale cache; raises OSError only if none exists
 
 
 def news_now(now_ts=None, events=None):
@@ -233,7 +256,12 @@ def news_now(now_ts=None, events=None):
 
 def show_news():
     now = time.time()
-    up = sorted(t for t in fetch_news() if t[0] > now)
+    try:
+        events = fetch_news()
+    except Exception as e:
+        print(f"news feed unavailable ({e})")
+        return
+    up = sorted(t for t in events if t[0] > now)
     if not up:
         print("No upcoming high-impact USD events this week.")
         return
