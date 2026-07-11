@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """XAU (gold) scalping signal bot - signal-only, no order execution.
 
-Pulls 1-min XAU/USD candles from Twelve Data, prints a BUY/SELL/HOLD signal
-with entry, TP, SL. You place the trade by hand.
+Pulls 1-min candles from Bitget USDT-M futures (default XAUUSDT - the gold perp,
+same price you see on Bitget/BingX), prints a BUY/SELL/HOLD signal with entry,
+TP, SL. Public market data, no API key. You place the trade by hand.
 
-Setup:
-    export TWELVEDATA_API_KEY=xxx        # free key: https://twelvedata.com
     python3 xau_scalp.py                 # one shot
+    python3 xau_scalp.py --now           # force BUY/SELL bias now (no HOLD)
     python3 xau_scalp.py --loop          # poll every 60s
     python3 xau_scalp.py --demo          # self-check, no network
 
-Tune via env: TP_DOLLARS (default 7), SL_DOLLARS (default 3), SYMBOL, INTERVAL.
+Tune via env: TP_DOLLARS (default 7), SL_DOLLARS (default 3), SYMBOL (Bitget
+mix symbol, default XAUUSDT), PRODUCT (default usdt-futures), INTERVAL (1m).
 """
 import json
 import os
@@ -20,9 +21,9 @@ import sys
 import time
 import urllib.request
 
-API_KEY = os.environ.get("TWELVEDATA_API_KEY", "")
-SYMBOL = os.environ.get("SYMBOL", "XAU/USD")
-INTERVAL = os.environ.get("INTERVAL", "1min")
+SYMBOL = os.environ.get("SYMBOL", "XAUUSDT")           # Bitget mix (futures) symbol
+PRODUCT = os.environ.get("PRODUCT", "usdt-futures")
+INTERVAL = os.environ.get("INTERVAL", "1m")
 TP = float(os.environ.get("TP_DOLLARS", "7"))   # 5-10 range
 SL = float(os.environ.get("SL_DOLLARS", "3"))   # 2-5 range
 
@@ -91,16 +92,14 @@ def entry_now(closes):
 
 
 def fetch_closes():
-    if not API_KEY:
-        sys.exit("Missing TWELVEDATA_API_KEY (free at twelvedata.com)")
-    url = (f"https://api.twelvedata.com/time_series?symbol={SYMBOL}"
-           f"&interval={INTERVAL}&outputsize=50&apikey={API_KEY}")
+    url = (f"https://api.bitget.com/api/v2/mix/market/candles?symbol={SYMBOL}"
+           f"&productType={PRODUCT}&granularity={INTERVAL}&limit=100")
     with urllib.request.urlopen(url, timeout=15) as resp:
         data = json.load(resp)
-    if data.get("status") == "error":
-        sys.exit(f"API error: {data.get('message')}")
-    vals = data["values"]  # newest first
-    return [float(v["close"]) for v in reversed(vals)]
+    if data.get("msg") != "success" or not data.get("data"):
+        sys.exit(f"Bitget error: {data.get('msg')} ({SYMBOL}/{PRODUCT})")
+    rows = data["data"]  # oldest first; row = [ts, open, high, low, close, ...]
+    return [float(r[4]) for r in rows]
 
 
 def notify(title, msg):
