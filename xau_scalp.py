@@ -312,7 +312,8 @@ def push_phone(title, msg, actionable):
     req = urllib.request.Request(
         f"https://ntfy.sh/{topic}", data=msg.encode(),
         headers={"Title": title,
-                 "Priority": "high" if actionable else "min",
+                 # low = shows notification but no sound/vibration; min = history only
+                 "Priority": "low" if actionable else "min",
                  "Tags": "chart_with_upwards_trend" if actionable else "zzz"})
     try:
         urllib.request.urlopen(req, timeout=10)
