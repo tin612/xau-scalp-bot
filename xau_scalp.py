@@ -98,6 +98,22 @@ def notify(title, msg):
                    check=False)
 
 
+def push_phone(title, msg, actionable):
+    # ntfy.sh push -> Android/iOS app. HOLD = silent low prio, BUY/SELL = loud.
+    topic = os.environ.get("NTFY_TOPIC", "")
+    if not topic:
+        return
+    req = urllib.request.Request(
+        f"https://ntfy.sh/{topic}", data=msg.encode(),
+        headers={"Title": title,
+                 "Priority": "high" if actionable else "min",
+                 "Tags": "chart_with_upwards_trend" if actionable else "zzz"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        print("ntfy err:", e)
+
+
 def report(closes):
     price = closes[-1]
     sig, reason = analyze(closes)
@@ -108,8 +124,10 @@ def report(closes):
     elif sig == "SELL":
         tail = f"  entry {price:.2f} | TP {price - TP:.2f} | SL {price + SL:.2f}"
     print(line + tail + f"   ({reason})")
+    title, body = f"XAU {sig} @ {price:.2f}", (tail.strip() or reason)
     if "--notify" in sys.argv:
-        notify(f"XAU {sig} @ {price:.2f}", (tail.strip() or reason))
+        notify(title, body)
+    push_phone(title, body, actionable=sig in ("BUY", "SELL"))
 
 
 def demo():
