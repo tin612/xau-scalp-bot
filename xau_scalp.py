@@ -117,6 +117,80 @@ def pick_symbol():
     return FUT_SYMBOL if is_weekend() else CFD_SYMBOL
 
 
+def fetch_ohlc(want):
+    # Bitget caps 1000 candles/request; page backwards with endTime to get `want`.
+    sym = pick_symbol()
+    base = (f"https://api.bitget.com/api/v2/mix/market/candles?symbol={sym}"
+            f"&productType={PRODUCT}&granularity={INTERVAL}&limit=1000")
+    rows, end = [], None
+    while len(rows) < want:
+        url = base + (f"&endTime={end}" if end else "")
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            data = json.load(resp)
+        page = data.get("data") or []
+        if not page:
+            break
+        rows = page + rows          # each page oldest-first; older pages prepend
+        end = int(page[0][0])       # next page ends just before this page's oldest
+        if len(page) < 1000:
+            break
+    if not rows:
+        sys.exit(f"Bitget error: {data.get('msg')} ({sym})")
+    highs = [float(r[2]) for r in rows]
+    lows = [float(r[3]) for r in rows]
+    closes = [float(r[4]) for r in rows]
+    return highs, lows, closes, sym
+
+
+def simulate(highs, lows, closes):
+    """Replay analyze() over history; for each BUY/SELL, scan forward for the
+    first TP or SL hit. Non-overlapping (next signal only after prior resolves).
+    ponytail: if a candle's range hits BOTH TP and SL, count SL first
+    (conservative - don't inflate win-rate). Upgrade path: use tick data if
+    the intrabar order actually matters for your edge.
+    """
+    trades, i, n = [], 30, len(closes)
+    while i < n - 1:
+        sig, _ = analyze(closes[:i + 1])
+        if sig not in ("BUY", "SELL"):
+            i += 1
+            continue
+        entry = closes[i]
+        tp = entry + TP if sig == "BUY" else entry - TP
+        sl = entry - SL if sig == "BUY" else entry + SL
+        outcome, j = None, i + 1
+        while j < n:
+            hit_tp = highs[j] >= tp if sig == "BUY" else lows[j] <= tp
+            hit_sl = lows[j] <= sl if sig == "BUY" else highs[j] >= sl
+            if hit_sl:
+                outcome = "SL"
+                break
+            if hit_tp:
+                outcome = "TP"
+                break
+            j += 1
+        if outcome is None:      # still open at end of data -> stop
+            break
+        trades.append((sig, outcome))
+        i = j + 1                # resume after the trade closed
+    return trades
+
+
+def backtest(days=3):
+    highs, lows, closes, sym = fetch_ohlc(days * 1440)
+    trades = simulate(highs, lows, closes)
+    wins = sum(1 for _, o in trades if o == "TP")
+    losses = len(trades) - wins
+    wr = wins / len(trades) * 100 if trades else 0.0
+    net = wins * TP - losses * SL
+    d = len(closes) / 1440
+    title = f"XAU backtest {sym}: {wr:.0f}% win ({len(trades)} trades)"
+    body = (f"~{d:.1f}d | {len(trades)} trades | TP {wins} SL {losses} | "
+            f"win-rate {wr:.1f}% | net {net:+.1f} pts (TP{TP:.0f}/SL{SL:.0f})")
+    print(title + "\n" + body)
+    push_phone(title, body, actionable=True)
+
+
 def notify(title, msg):
     if platform.system() != "Darwin":
         return
@@ -181,12 +255,22 @@ def demo():
     assert not is_weekend(mk(2, 12))      # Wednesday
     assert is_weekend(mk(4, 22))          # Friday after close
     assert not is_weekend(mk(4, 12))      # Friday midday
-    print("demo ok:", analyze(up), analyze(down), entry_now(up))
+    # simulate: a BUY that runs +TP without hitting SL must score one TP win.
+    seq = [2600 + i * 0.8 for i in range(30)] + [2620, 2616, 2613, 2619]
+    seq += [seq[-1] + 3 * k for k in range(1, 6)]  # rally past TP
+    hi = [c + 0.2 for c in seq]
+    lo = [c - 0.2 for c in seq]                    # never dips to SL
+    tr = simulate(hi, lo, seq)
+    assert tr and tr[0] == ("BUY", "TP"), tr
+    print("demo ok:", analyze(up), analyze(down), entry_now(up), "bt", tr)
 
 
 if __name__ == "__main__":
     if "--demo" in sys.argv:
         demo()
+    elif "--backtest" in sys.argv:
+        nums = [int(a) for a in sys.argv if a.isdigit()]
+        backtest(nums[0] if nums else 3)   # days
     elif "--loop" in sys.argv:
         while True:
             try:
