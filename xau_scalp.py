@@ -209,6 +209,22 @@ def simulate_forced(highs, lows, closes, step=10):
     return trades
 
 
+def run_sim(days=7, forced=False):
+    highs, lows, closes, sym = fetch_ohlc(days * 1440)
+    trades = simulate_forced(highs, lows, closes) if forced else simulate(highs, lows, closes)
+    r = sim_account(trades, closes[-1])
+    mode = "forced/10min" if forced else "selective"
+    print(f"XAU sim {sym} [{mode}] TP{TP:.0f}/SL{SL:.0f} over ~{len(closes)/1440:.1f}d")
+    print(f"  ${r['start']:.0f} -> ${r['final']:.2f}  ({r['trades']} trades, "
+          f"maxDD {r['maxdd']:.0f}%)")
+    print(f"  goal ${r['goal']:.0f}: " +
+          (f"HIT at trade #{r['hit']}" if r['hit'] else "NOT reached"))
+    print(f"  fees total ${r['fees']:.2f} | per-trade: win ${r['win_dollar']:.2f} "
+          f"vs SL ${r['risk_dollar']:.2f} vs fee ${r['fee_per_trade']:.2f}")
+    if r['fee_per_trade'] >= r['win_dollar']:
+        print("  ** FEE >= WIN: edge is dead - fees eat every winning trade **")
+
+
 def backtest(days=3, forced=False):
     highs, lows, closes, sym = fetch_ohlc(days * 1440)
     trades = simulate_forced(highs, lows, closes) if forced else simulate(highs, lows, closes)
@@ -296,6 +312,37 @@ def show_news():
         print(f"{when:%a %m-%d %H:%M} (in {(ts - now) / 3600:.1f}h)  {title}")
 
 
+def sim_account(trades, price):
+    """Walk the trade sequence as a real $ account: position sized by risk-%,
+    compounding, with exchange fees on notional. Answers 'can $50 reach $100'.
+    Env: ACCOUNT(50) GOAL(100) RISK_PCT(2) FEE_PCT(0.06 Bitget taker round-trip
+    per side). XAUUSDT: 1 unit = $1 per point, so units = $/point.
+    """
+    acct = start = float(os.environ.get("ACCOUNT", "50"))
+    goal = float(os.environ.get("GOAL", "100"))
+    risk_pct = float(os.environ.get("RISK_PCT", "2")) / 100
+    fee_pct = float(os.environ.get("FEE_PCT", "0.06")) / 100
+    peak, maxdd, hit, fees_paid = acct, 0.0, None, 0.0
+    for k, (_, out) in enumerate(trades, 1):
+        per_pt = (acct * risk_pct) / SL          # $ risked per point
+        fee = per_pt * price * fee_pct * 2       # open + close
+        fees_paid += fee
+        acct += (TP if out == "TP" else -SL) * per_pt - fee
+        peak = max(peak, acct)
+        maxdd = max(maxdd, (peak - acct) / peak if peak else 0)
+        if acct <= 0:
+            acct = 0
+            break
+        if hit is None and acct >= goal:
+            hit = k
+    # per-trade fee vs risk: if fee >= win, the edge is dead on arrival
+    ex_pt = per_pt if trades else 0
+    return {"final": acct, "start": start, "goal": goal, "hit": hit,
+            "trades": len(trades), "maxdd": maxdd * 100, "fees": fees_paid,
+            "fee_per_trade": fees_paid / len(trades) if trades else 0,
+            "win_dollar": TP * ex_pt, "risk_dollar": SL * ex_pt}
+
+
 def notify(title, msg):
     if platform.system() != "Darwin":
         return
@@ -377,6 +424,9 @@ def demo():
     assert tr and tr[0] == ("BUY", "TP"), tr
     tf = simulate_forced(hi, lo, seq, step=5)   # forced also scores the rally
     assert ("BUY", "TP") in tf, tf
+    # sim_account: all-wins grows, all-losses shrinks
+    assert sim_account([("BUY", "TP")] * 20, 4120)["final"] > 50
+    assert sim_account([("BUY", "SL")] * 20, 4120)["final"] < 50
     # news blackout window: [-AFTER, +BEFORE] around event T (default 15 / 30 min)
     T, evs = 1_000_000.0, [(1_000_000.0, "CPI")]
     assert news_now(T - 20 * 60, evs)[0] == "CPI"   # 20m before -> blackout
@@ -391,6 +441,9 @@ if __name__ == "__main__":
         demo()
     elif "--news" in sys.argv:
         show_news()
+    elif "--sim" in sys.argv:
+        nums = [int(a) for a in sys.argv if a.isdigit()]
+        run_sim(nums[0] if nums else 7, forced="--forced" in sys.argv)
     elif "--backtest" in sys.argv:
         nums = [int(a) for a in sys.argv if a.isdigit()]
         backtest(nums[0] if nums else 3, forced="--forced" in sys.argv)   # days
