@@ -184,15 +184,41 @@ def simulate(highs, lows, closes):
     return trades
 
 
-def backtest(days=3):
+def simulate_forced(highs, lows, closes, step=10):
+    """Forced mode: every `step` minutes take the trend-side bias (entry_now),
+    each signal an independent trade resolved by first TP/SL. Mirrors the live
+    "a signal every 10 min" behaviour - trades overlap, as they do live.
+    """
+    trades, n = [], len(closes)
+    for i in range(30, n - 1, step):
+        sig, _ = entry_now(closes[:i + 1])
+        if sig not in ("BUY", "SELL"):
+            continue
+        entry = closes[i]
+        tp = entry + TP if sig == "BUY" else entry - TP
+        sl = entry - SL if sig == "BUY" else entry + SL
+        for j in range(i + 1, n):
+            hit_tp = highs[j] >= tp if sig == "BUY" else lows[j] <= tp
+            hit_sl = lows[j] <= sl if sig == "BUY" else highs[j] >= sl
+            if hit_sl:
+                trades.append((sig, "SL"))
+                break
+            if hit_tp:
+                trades.append((sig, "TP"))
+                break
+    return trades
+
+
+def backtest(days=3, forced=False):
     highs, lows, closes, sym = fetch_ohlc(days * 1440)
-    trades = simulate(highs, lows, closes)
+    trades = simulate_forced(highs, lows, closes) if forced else simulate(highs, lows, closes)
     wins = sum(1 for _, o in trades if o == "TP")
     losses = len(trades) - wins
     wr = wins / len(trades) * 100 if trades else 0.0
     net = wins * TP - losses * SL
     d = len(closes) / 1440
-    title = f"XAU backtest {sym}: {wr:.0f}% win ({len(trades)} trades)"
+    mode = "forced/10min" if forced else "selective"
+    title = f"XAU backtest {sym} [{mode}]: {wr:.0f}% win ({len(trades)} trades)"
     body = (f"~{d:.1f}d | {len(trades)} trades | TP {wins} SL {losses} | "
             f"win-rate {wr:.1f}% | net {net:+.1f} pts (TP{TP:.0f}/SL{SL:.0f})")
     print(title + "\n" + body)
@@ -348,6 +374,8 @@ def demo():
     lo = [c - 0.2 for c in seq]                    # never dips to SL
     tr = simulate(hi, lo, seq)
     assert tr and tr[0] == ("BUY", "TP"), tr
+    tf = simulate_forced(hi, lo, seq, step=5)   # forced also scores the rally
+    assert ("BUY", "TP") in tf, tf
     # news blackout window: [-AFTER, +BEFORE] around event T (default 15 / 30 min)
     T, evs = 1_000_000.0, [(1_000_000.0, "CPI")]
     assert news_now(T - 20 * 60, evs)[0] == "CPI"   # 20m before -> blackout
@@ -364,7 +392,7 @@ if __name__ == "__main__":
         show_news()
     elif "--backtest" in sys.argv:
         nums = [int(a) for a in sys.argv if a.isdigit()]
-        backtest(nums[0] if nums else 3)   # days
+        backtest(nums[0] if nums else 3, forced="--forced" in sys.argv)   # days
     elif "--loop" in sys.argv:
         while True:
             try:
