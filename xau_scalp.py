@@ -77,6 +77,19 @@ def analyze(closes):
     return "HOLD", f"trend={'bull' if bull else 'bear'}, RSI={r_now:.0f} (no entry trigger)"
 
 
+def entry_now(closes):
+    """On-demand 'if I enter right now, which side?' - forced BUY/SELL from trend
+    (EMA9 vs EMA21). NOT a confirmed trigger like analyze(); it's directional bias.
+    """
+    if len(closes) < 22:
+        return "HOLD", "need >=22 candles"
+    e9, e21 = ema(closes, 9), ema(closes, 21)
+    r = rsi(closes)[-1]
+    if e9[-1] >= e21[-1]:
+        return "BUY", f"trend bull (EMA9>=EMA21), RSI {r:.0f}"
+    return "SELL", f"trend bear (EMA9<EMA21), RSI {r:.0f}"
+
+
 def fetch_closes():
     if not API_KEY:
         sys.exit("Missing TWELVEDATA_API_KEY (free at twelvedata.com)")
@@ -116,7 +129,11 @@ def push_phone(title, msg, actionable):
 
 def report(closes):
     price = closes[-1]
-    sig, reason = analyze(closes)
+    if "--now" in sys.argv:
+        sig, reason = entry_now(closes)
+        reason = "ENTRY NOW bias - " + reason
+    else:
+        sig, reason = analyze(closes)
     line = f"[{time.strftime('%H:%M:%S')}] {SYMBOL} {price:.2f}  ->  {sig}"
     tail = ""
     if sig == "BUY":
@@ -139,7 +156,10 @@ def demo():
     s, r = analyze(down)
     assert s == "SELL", (s, r)
     assert analyze([2650.0] * 40)[0] == "HOLD"  # flat market
-    print("demo ok:", analyze(up), analyze(down))
+    # entry_now: never HOLD on trending data, picks the trend side.
+    assert entry_now([2600 + i for i in range(30)])[0] == "BUY"
+    assert entry_now([2700 - i for i in range(30)])[0] == "SELL"
+    print("demo ok:", analyze(up), analyze(down), entry_now(up))
 
 
 if __name__ == "__main__":
