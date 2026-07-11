@@ -14,6 +14,7 @@ no API key. You place the trade by hand.
 Tune via env: TP_DOLLARS (7), SL_DOLLARS (3), CFD_SYMBOL (XAUTUSDT),
 FUT_SYMBOL (XAUUSDT), PRODUCT (usdt-futures), INTERVAL (1m).
 """
+import datetime
 import json
 import os
 import platform
@@ -29,6 +30,10 @@ PRODUCT = os.environ.get("PRODUCT", "usdt-futures")
 INTERVAL = os.environ.get("INTERVAL", "1m")
 TP = float(os.environ.get("TP_DOLLARS", "7"))   # 5-10 range
 SL = float(os.environ.get("SL_DOLLARS", "3"))   # 2-5 range
+# News blackout: stand aside around high-impact USD events (gold whipsaws).
+NEWS_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+NEWS_BEFORE = int(os.environ.get("NEWS_BEFORE_MIN", "30"))  # minutes before event
+NEWS_AFTER = int(os.environ.get("NEWS_AFTER_MIN", "15"))    # minutes after event
 
 
 def ema(values, period):
@@ -191,6 +196,52 @@ def backtest(days=3):
     push_phone(title, body, actionable=True)
 
 
+def fetch_news():
+    # High-impact USD events this week from Forex Factory (gold is USD-priced).
+    req = urllib.request.Request(NEWS_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        raw = json.load(resp)
+    out = []
+    for e in raw:
+        if e.get("impact") != "High" or e.get("country") != "USD":
+            continue
+        try:
+            ts = datetime.datetime.fromisoformat(e["date"]).timestamp()
+        except Exception:
+            continue
+        out.append((ts, e.get("title", "?")))
+    return out
+
+
+def news_now(now_ts=None, events=None):
+    """Nearest high-impact event inside [now-AFTER, now+BEFORE], else None.
+    Network failure -> None (never block signals on a flaky feed).
+    """
+    now_ts = time.time() if now_ts is None else now_ts
+    if events is None:
+        try:
+            events = fetch_news()
+        except Exception:
+            return None
+    best = None
+    for ts, title in events:
+        mins = (ts - now_ts) / 60
+        if -NEWS_AFTER <= mins <= NEWS_BEFORE and (best is None or abs(mins) < abs(best[1])):
+            best = (title, mins)
+    return best
+
+
+def show_news():
+    now = time.time()
+    up = sorted(t for t in fetch_news() if t[0] > now)
+    if not up:
+        print("No upcoming high-impact USD events this week.")
+        return
+    for ts, title in up:
+        when = datetime.datetime.fromtimestamp(ts)
+        print(f"{when:%a %m-%d %H:%M} (in {(ts - now) / 3600:.1f}h)  {title}")
+
+
 def notify(title, msg):
     if platform.system() != "Darwin":
         return
@@ -221,7 +272,11 @@ def report(closes, sym):
         sig, reason = entry_now(closes)
         reason = "ENTRY NOW bias - " + reason
     else:
-        sig, reason = analyze(closes)
+        ev = news_now()
+        if ev:
+            sig, reason = "HOLD", f"NEWS {ev[0]} in {ev[1]:+.0f}m - stand aside"
+        else:
+            sig, reason = analyze(closes)
     line = f"[{time.strftime('%H:%M:%S')}] {sym} {price:.2f}  ->  {sig}"
     tail = ""
     if sig == "BUY":
@@ -262,12 +317,20 @@ def demo():
     lo = [c - 0.2 for c in seq]                    # never dips to SL
     tr = simulate(hi, lo, seq)
     assert tr and tr[0] == ("BUY", "TP"), tr
+    # news blackout window: [-AFTER, +BEFORE] around event T (default 15 / 30 min)
+    T, evs = 1_000_000.0, [(1_000_000.0, "CPI")]
+    assert news_now(T - 20 * 60, evs)[0] == "CPI"   # 20m before -> blackout
+    assert news_now(T + 10 * 60, evs)[0] == "CPI"   # 10m after  -> blackout
+    assert news_now(T - 40 * 60, evs) is None       # 40m before -> clear
+    assert news_now(T + 20 * 60, evs) is None       # 20m after  -> clear
     print("demo ok:", analyze(up), analyze(down), entry_now(up), "bt", tr)
 
 
 if __name__ == "__main__":
     if "--demo" in sys.argv:
         demo()
+    elif "--news" in sys.argv:
+        show_news()
     elif "--backtest" in sys.argv:
         nums = [int(a) for a in sys.argv if a.isdigit()]
         backtest(nums[0] if nums else 3)   # days
