@@ -14,6 +14,8 @@ Tune via env: TP_DOLLARS (default 7), SL_DOLLARS (default 3), SYMBOL, INTERVAL.
 """
 import json
 import os
+import platform
+import subprocess
 import sys
 import time
 import urllib.request
@@ -88,15 +90,26 @@ def fetch_closes():
     return [float(v["close"]) for v in reversed(vals)]
 
 
+def notify(title, msg):
+    if platform.system() != "Darwin":
+        return
+    subprocess.run(["osascript", "-e",
+                    f'display notification "{msg}" with title "{title}"'],
+                   check=False)
+
+
 def report(closes):
     price = closes[-1]
     sig, reason = analyze(closes)
     line = f"[{time.strftime('%H:%M:%S')}] {SYMBOL} {price:.2f}  ->  {sig}"
+    tail = ""
     if sig == "BUY":
-        line += f"  entry {price:.2f} | TP {price + TP:.2f} | SL {price - SL:.2f}"
+        tail = f"  entry {price:.2f} | TP {price + TP:.2f} | SL {price - SL:.2f}"
     elif sig == "SELL":
-        line += f"  entry {price:.2f} | TP {price - TP:.2f} | SL {price + SL:.2f}"
-    print(line + f"   ({reason})")
+        tail = f"  entry {price:.2f} | TP {price - TP:.2f} | SL {price + SL:.2f}"
+    print(line + tail + f"   ({reason})")
+    if "--notify" in sys.argv:
+        notify(f"XAU {sig} @ {price:.2f}", (tail.strip() or reason))
 
 
 def demo():
