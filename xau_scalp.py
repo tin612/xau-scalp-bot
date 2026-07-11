@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """XAU (gold) scalping signal bot - signal-only, no order execution.
 
-Pulls 1-min candles from Bitget USDT-M futures (default XAUUSDT - the gold perp,
-same price you see on Bitget/BingX), prints a BUY/SELL/HOLD signal with entry,
-TP, SL. Public market data, no API key. You place the trade by hand.
+Pulls 1-min candles from Bitget USDT-M futures. Auto-switches source by session:
+weekday gold CFD (XAUTUSDT, tracks spot) Mon-Fri, 24/7 perp (XAUUSDT) on the
+weekend. Prints a BUY/SELL/HOLD signal with entry, TP, SL. Public market data,
+no API key. You place the trade by hand.
 
     python3 xau_scalp.py                 # one shot
     python3 xau_scalp.py --now           # force BUY/SELL bias now (no HOLD)
     python3 xau_scalp.py --loop          # poll every 60s
     python3 xau_scalp.py --demo          # self-check, no network
 
-Tune via env: TP_DOLLARS (default 7), SL_DOLLARS (default 3), SYMBOL (Bitget
-mix symbol, default XAUUSDT), PRODUCT (default usdt-futures), INTERVAL (1m).
+Tune via env: TP_DOLLARS (7), SL_DOLLARS (3), CFD_SYMBOL (XAUTUSDT),
+FUT_SYMBOL (XAUUSDT), PRODUCT (usdt-futures), INTERVAL (1m).
 """
 import json
 import os
@@ -21,7 +22,9 @@ import sys
 import time
 import urllib.request
 
-SYMBOL = os.environ.get("SYMBOL", "XAUUSDT")           # Bitget mix (futures) symbol
+# Weekday = gold CFD (XAUTUSDT, tracks spot, follows session); weekend = 24/7 perp.
+CFD_SYMBOL = os.environ.get("CFD_SYMBOL", "XAUTUSDT")  # Mon-Fri gold session
+FUT_SYMBOL = os.environ.get("FUT_SYMBOL", "XAUUSDT")   # weekend 24/7 futures
 PRODUCT = os.environ.get("PRODUCT", "usdt-futures")
 INTERVAL = os.environ.get("INTERVAL", "1m")
 TP = float(os.environ.get("TP_DOLLARS", "7"))   # 5-10 range
@@ -92,14 +95,26 @@ def entry_now(closes):
 
 
 def fetch_closes():
-    url = (f"https://api.bitget.com/api/v2/mix/market/candles?symbol={SYMBOL}"
+    sym = pick_symbol()
+    url = (f"https://api.bitget.com/api/v2/mix/market/candles?symbol={sym}"
            f"&productType={PRODUCT}&granularity={INTERVAL}&limit=100")
     with urllib.request.urlopen(url, timeout=15) as resp:
         data = json.load(resp)
     if data.get("msg") != "success" or not data.get("data"):
-        sys.exit(f"Bitget error: {data.get('msg')} ({SYMBOL}/{PRODUCT})")
+        sys.exit(f"Bitget error: {data.get('msg')} ({sym}/{PRODUCT})")
     rows = data["data"]  # oldest first; row = [ts, open, high, low, close, ...]
-    return [float(r[4]) for r in rows]
+    return [float(r[4]) for r in rows], sym
+
+
+def is_weekend(t=None):
+    # Gold spot/CFD session is closed: Fri >=21:00 UTC, all Sat, Sun <22:00 UTC.
+    t = t or time.gmtime()
+    wd, h = t.tm_wday, t.tm_hour  # Mon=0 .. Sun=6
+    return wd == 5 or (wd == 6 and h < 22) or (wd == 4 and h >= 21)
+
+
+def pick_symbol():
+    return FUT_SYMBOL if is_weekend() else CFD_SYMBOL
 
 
 def notify(title, msg):
@@ -126,14 +141,14 @@ def push_phone(title, msg, actionable):
         print("ntfy err:", e)
 
 
-def report(closes):
+def report(closes, sym):
     price = closes[-1]
     if "--now" in sys.argv:
         sig, reason = entry_now(closes)
         reason = "ENTRY NOW bias - " + reason
     else:
         sig, reason = analyze(closes)
-    line = f"[{time.strftime('%H:%M:%S')}] {SYMBOL} {price:.2f}  ->  {sig}"
+    line = f"[{time.strftime('%H:%M:%S')}] {sym} {price:.2f}  ->  {sig}"
     tail = ""
     if sig == "BUY":
         tail = f"  entry {price:.2f} | TP {price + TP:.2f} | SL {price - SL:.2f}"
@@ -158,6 +173,14 @@ def demo():
     # entry_now: never HOLD on trending data, picks the trend side.
     assert entry_now([2600 + i for i in range(30)])[0] == "BUY"
     assert entry_now([2700 - i for i in range(30)])[0] == "SELL"
+    # weekend switch (wday: Mon=0..Sun=6)
+    mk = lambda wd, h: time.struct_time((2026, 7, 1, h, 0, 0, wd, 1, 0))
+    assert is_weekend(mk(5, 10))          # Saturday
+    assert is_weekend(mk(6, 10))          # Sunday morning
+    assert not is_weekend(mk(6, 23))      # Sunday after 22:00 UTC reopen
+    assert not is_weekend(mk(2, 12))      # Wednesday
+    assert is_weekend(mk(4, 22))          # Friday after close
+    assert not is_weekend(mk(4, 12))      # Friday midday
     print("demo ok:", analyze(up), analyze(down), entry_now(up))
 
 
@@ -167,9 +190,9 @@ if __name__ == "__main__":
     elif "--loop" in sys.argv:
         while True:
             try:
-                report(fetch_closes())
+                report(*fetch_closes())
             except Exception as e:
                 print("err:", e)
             time.sleep(60)
     else:
-        report(fetch_closes())
+        report(*fetch_closes())
