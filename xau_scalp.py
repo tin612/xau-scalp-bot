@@ -298,7 +298,10 @@ def report(closes, sym):
     price = closes[-1]
     if "--now" in sys.argv:
         sig, reason = entry_now(closes)
-        reason = "ENTRY NOW bias - " + reason
+        reason = "forced bias - " + reason
+        ev = news_now()
+        if ev:
+            reason += f" | WARN news {ev[0]} in {ev[1]:+.0f}m"
     else:
         ev = news_now()
         if ev:

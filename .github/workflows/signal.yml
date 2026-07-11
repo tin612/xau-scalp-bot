@@ -1,18 +1,13 @@
 name: xau-signal
 on:
   schedule:
-    - cron: '*/10 * * * *'   # every 10 min (GitHub may delay under load)
+    - cron: '*/10 * * * *'   # every 10 min, forced BUY/SELL (scalp test mode)
   workflow_dispatch:
-    inputs:
-      now:
-        description: 'Force BUY/SELL entry now (skip HOLD filter)'
-        type: boolean
-        default: true
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 xau_scalp.py ${{ (github.event_name == 'workflow_dispatch' && inputs.now) && '--now' || '' }}
+      - run: python3 xau_scalp.py --now
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
