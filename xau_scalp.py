@@ -241,6 +241,30 @@ def backtest(days=3, forced=False):
     push_phone(title, body, actionable=True)
 
 
+def daily_summary():
+    # End-of-day digest: today's price action + a 3-day backtest. Stateless (one
+    # fetch), pushed silently to phone for reference. HOLD is fine here.
+    highs, lows, closes, sym = fetch_ohlc(3 * 1440)
+    price = closes[-1]
+    day = closes[-1440:] if len(closes) >= 1440 else closes
+    d_open, d_hi, d_lo = day[0], max(highs[-len(day):]), min(lows[-len(day):])
+    chg = price - d_open
+    pct = chg / d_open * 100 if d_open else 0.0
+    sig, _ = analyze(closes)
+    bias, _ = entry_now(closes)
+    trades = simulate(highs, lows, closes)
+    n = len(trades)
+    wins = sum(1 for _, o in trades if o == "TP")
+    wr = wins / n * 100 if n else 0.0
+    net = wins * TP - (n - wins) * SL
+    title = f"XAU tong ket {time.strftime('%Y-%m-%d')}"
+    body = (f"{sym} {price:.2f} (24h {chg:+.1f} / {pct:+.2f}%) H{d_hi:.0f} L{d_lo:.0f}\n"
+            f"trend: {bias} | tin hieu: {sig}\n"
+            f"backtest 3d: {wr:.0f}% win, {n} lenh, net {net:+.0f} diem")
+    print(title + "\n" + body)
+    push_phone(title, body, actionable=False, prio="low")  # reference, silent but visible
+
+
 def _parse_news(raw):
     out = []
     for e in raw:
@@ -351,7 +375,7 @@ def notify(title, msg):
                    check=False)
 
 
-def push_phone(title, msg, actionable):
+def push_phone(title, msg, actionable, prio=None):
     # ntfy.sh push -> Android/iOS app. HOLD = silent low prio, BUY/SELL = loud.
     topic = os.environ.get("NTFY_TOPIC", "")
     if not topic:
@@ -360,7 +384,7 @@ def push_phone(title, msg, actionable):
         f"https://ntfy.sh/{topic}", data=msg.encode(),
         headers={"Title": title,
                  # low = shows notification but no sound/vibration; min = history only
-                 "Priority": "low" if actionable else "min",
+                 "Priority": prio or ("low" if actionable else "min"),
                  "Tags": "chart_with_upwards_trend" if actionable else "zzz"})
     try:
         urllib.request.urlopen(req, timeout=10)
@@ -441,6 +465,8 @@ if __name__ == "__main__":
         demo()
     elif "--news" in sys.argv:
         show_news()
+    elif "--daily" in sys.argv:
+        daily_summary()
     elif "--sim" in sys.argv:
         nums = [int(a) for a in sys.argv if a.isdigit()]
         run_sim(nums[0] if nums else 7, forced="--forced" in sys.argv)

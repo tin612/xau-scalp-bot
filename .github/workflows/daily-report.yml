@@ -1,17 +1,13 @@
 name: xau-daily-report
 on:
   schedule:
-    - cron: '0 14 * * *'    # 14:00 UTC = 21:00 VN, end-of-day win-rate report
+    - cron: '0 14 * * *'    # 14:00 UTC = 21:00 VN, end-of-day summary
   workflow_dispatch:
-    inputs:
-      days:
-        description: 'Backtest window (days)'
-        default: '3'
 jobs:
   report:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 xau_scalp.py --backtest ${{ github.event.inputs.days || '3' }}
+      - run: python3 xau_scalp.py --daily
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
