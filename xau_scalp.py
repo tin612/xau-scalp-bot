@@ -322,11 +322,16 @@ def paper_run():
     wins = sum(1 for _, o in trades if o == "TP")
     wr = wins / n * 100 if n else 0.0
     pnl = sim_account(trades, closes[-1], start=base)["final"] - base if n else 0.0
-    title = f"XAU paper {days}d (<={per_day}/ngay, ${base:.0f})"
-    body = (f"backtest {days}d: {wr:.0f}% win, {n} lenh (~{n / days:.0f}/ngay), "
-            f"net {pnl:+.2f}$ tren ${base:.0f}")
+    pct = pnl / base * 100 if base else 0.0
+    target = float(os.environ.get("TARGET_PCT", "10"))   # weekly target %, alert if hit
+    hit = pct >= target
+    # target hit -> loud alert; otherwise routine silent report showing the gap
+    title = "XAU TARGET DAT {:+.0f}%!".format(pct) if hit else f"XAU paper {days}d"
+    body = (f"backtest {days}d: {wr:.0f}% win, {n} lenh (~{n / days:.0f}/ngay)\n"
+            f"net {pnl:+.2f}$ = {pct:+.1f}% tren ${base:.0f} "
+            f"(target +{target:.0f}%: {'DAT' if hit else 'chua dat'})")
     print(title + "\n" + body)
-    push_phone(title, body, actionable=False, prio="low")
+    push_phone(title, body, actionable=hit, prio=("high" if hit else "low"))
 
 
 def _parse_news(raw):
