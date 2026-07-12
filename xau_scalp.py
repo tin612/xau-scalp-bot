@@ -257,9 +257,17 @@ def daily_summary():
     wins = sum(1 for _, o in trades if o == "TP")
     wr = wins / n * 100 if n else 0.0
     net = wins * TP - (n - wins) * SL
+    # today's $ P&L if you'd traded the signals on a $300 base (fee-aware, SIMULATED)
+    base = float(os.environ.get("BASE_USD", "300"))
+    today = simulate(highs[-1440:], lows[-1440:], closes[-1440:])
+    r = sim_account(today, price, start=base)
+    tw = sum(1 for _, o in today if o == "TP")
+    pnl = r["final"] - base
     title = f"XAU tong ket {time.strftime('%Y-%m-%d')}"
     body = (f"{sym} {price:.2f} (24h {chg:+.1f} / {pct:+.2f}%) H{d_hi:.0f} L{d_lo:.0f}\n"
             f"trend: {bias} | tin hieu: {sig}\n"
+            f"HOM NAY (mo phong ${base:.0f}, co phi): {pnl:+.2f}$ "
+            f"({len(today)} lenh, {tw} TP)\n"
             f"backtest 3d: {wr:.0f}% win, {n} lenh, net {net:+.0f} diem")
     print(title + "\n" + body)
     push_phone(title, body, actionable=False, prio="low")  # reference, silent but visible
@@ -336,13 +344,13 @@ def show_news():
         print(f"{when:%a %m-%d %H:%M} (in {(ts - now) / 3600:.1f}h)  {title}")
 
 
-def sim_account(trades, price):
+def sim_account(trades, price, start=None):
     """Walk the trade sequence as a real $ account: position sized by risk-%,
     compounding, with exchange fees on notional. Answers 'can $50 reach $100'.
     Env: ACCOUNT(50) GOAL(100) RISK_PCT(2) FEE_PCT(0.06 Bitget taker round-trip
     per side). XAUUSDT: 1 unit = $1 per point, so units = $/point.
     """
-    acct = start = float(os.environ.get("ACCOUNT", "50"))
+    acct = start = float(start if start is not None else os.environ.get("ACCOUNT", "50"))
     goal = float(os.environ.get("GOAL", "100"))
     risk_pct = float(os.environ.get("RISK_PCT", "2")) / 100
     fee_pct = float(os.environ.get("FEE_PCT", "0.06")) / 100
