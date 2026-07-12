@@ -273,6 +273,26 @@ def daily_summary():
     push_phone(title, body, actionable=False, prio="low")  # reference, silent but visible
 
 
+def paper_run():
+    # Forward paper-trade report: replay the window, take the first N trades on a
+    # $300 base (fee-aware). Deterministic strategy -> replaying the past week ==
+    # having paper-traded it forward. Env: PAPER_DAYS(7) PAPER_TRADES(10) BASE_USD(300).
+    days = int(os.environ.get("PAPER_DAYS", "7"))
+    ntr = int(os.environ.get("PAPER_TRADES", "10"))
+    base = float(os.environ.get("BASE_USD", "300"))
+    highs, lows, closes, sym = fetch_ohlc(days * 1440)
+    trades = simulate(highs, lows, closes)[:ntr]   # first N trades in the window
+    n = len(trades)
+    wins = sum(1 for _, o in trades if o == "TP")
+    wr = wins / n * 100 if n else 0.0
+    pnl = sim_account(trades, closes[-1], start=base)["final"] - base if n else 0.0
+    title = f"XAU paper {days}d (base ${base:.0f})"
+    body = (f"backtest {days}d: {wr:.0f}% win, {n} lenh (cap {ntr}), "
+            f"net {pnl:+.2f}$ tren ${base:.0f}")
+    print(title + "\n" + body)
+    push_phone(title, body, actionable=False, prio="low")
+
+
 def _parse_news(raw):
     out = []
     for e in raw:
@@ -475,6 +495,8 @@ if __name__ == "__main__":
         show_news()
     elif "--daily" in sys.argv:
         daily_summary()
+    elif "--paper" in sys.argv:
+        paper_run()
     elif "--sim" in sys.argv:
         nums = [int(a) for a in sys.argv if a.isdigit()]
         run_sim(nums[0] if nums else 7, forced="--forced" in sys.argv)

@@ -1,0 +1,13 @@
+name: xau-weekly-paper
+on:
+  schedule:
+    - cron: '0 14 * * 1'    # Monday 14:00 UTC = 21:00 VN: weekly paper-trade tally
+  workflow_dispatch:
+jobs:
+  paper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 xau_scalp.py --paper
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
