@@ -12,3 +12,4 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           LOT: "0.01"
+          FEE_FLAT: "0.30"   # $0.06 commission + ~$0.24 est. spread; set to your measured cost
