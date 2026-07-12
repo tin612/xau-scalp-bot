@@ -273,21 +273,57 @@ def daily_summary():
     push_phone(title, body, actionable=False, prio="low")  # reference, silent but visible
 
 
+def simulate_capped(highs, lows, closes, per_day):
+    """Like simulate() but takes at most `per_day` selective signals per 24h
+    (1m candles: day bucket = index // 1440). Models 'I take up to N trades a day'.
+    """
+    trades, i, n, per = [], 30, len(closes), {}
+    while i < n - 1:
+        day = i // 1440
+        if per.get(day, 0) >= per_day:
+            i = (day + 1) * 1440          # daily quota hit -> skip to next day
+            continue
+        sig, _ = analyze(closes[:i + 1])
+        if sig not in ("BUY", "SELL"):
+            i += 1
+            continue
+        entry = closes[i]
+        tp = entry + TP if sig == "BUY" else entry - TP
+        sl = entry - SL if sig == "BUY" else entry + SL
+        outcome, j = None, i + 1
+        while j < n:
+            hit_tp = highs[j] >= tp if sig == "BUY" else lows[j] <= tp
+            hit_sl = lows[j] <= sl if sig == "BUY" else highs[j] >= sl
+            if hit_sl:
+                outcome = "SL"
+                break
+            if hit_tp:
+                outcome = "TP"
+                break
+            j += 1
+        if outcome is None:
+            break
+        trades.append((sig, outcome))
+        per[day] = per.get(day, 0) + 1
+        i = j + 1
+    return trades
+
+
 def paper_run():
-    # Forward paper-trade report: replay the window, take the first N trades on a
-    # $300 base (fee-aware). Deterministic strategy -> replaying the past week ==
-    # having paper-traded it forward. Env: PAPER_DAYS(7) PAPER_TRADES(10) BASE_USD(300).
+    # Forward paper-trade: replay the window, take up to N selective signals PER
+    # DAY on a $300 base (fee-aware). Deterministic strategy -> replaying the past
+    # week == paper-trading it forward. Env: PAPER_DAYS(7) PAPER_PER_DAY(10) BASE_USD(300).
     days = int(os.environ.get("PAPER_DAYS", "7"))
-    ntr = int(os.environ.get("PAPER_TRADES", "10"))
+    per_day = int(os.environ.get("PAPER_PER_DAY", "10"))
     base = float(os.environ.get("BASE_USD", "300"))
     highs, lows, closes, sym = fetch_ohlc(days * 1440)
-    trades = simulate(highs, lows, closes)[:ntr]   # first N trades in the window
+    trades = simulate_capped(highs, lows, closes, per_day)
     n = len(trades)
     wins = sum(1 for _, o in trades if o == "TP")
     wr = wins / n * 100 if n else 0.0
     pnl = sim_account(trades, closes[-1], start=base)["final"] - base if n else 0.0
-    title = f"XAU paper {days}d (base ${base:.0f})"
-    body = (f"backtest {days}d: {wr:.0f}% win, {n} lenh (cap {ntr}), "
+    title = f"XAU paper {days}d (<={per_day}/ngay, ${base:.0f})"
+    body = (f"backtest {days}d: {wr:.0f}% win, {n} lenh (~{n / days:.0f}/ngay), "
             f"net {pnl:+.2f}$ tren ${base:.0f}")
     print(title + "\n" + body)
     push_phone(title, body, actionable=False, prio="low")
