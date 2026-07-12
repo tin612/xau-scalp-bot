@@ -334,6 +334,93 @@ def paper_run():
     push_phone(title, body, actionable=hit, prio=("high" if hit else "low"))
 
 
+def atr(highs, lows, closes, period=14):
+    tr = [highs[0] - lows[0]]
+    for i in range(1, len(closes)):
+        tr.append(max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1])))
+    out, a = [tr[0]] * len(tr), sum(tr[:period]) / period
+    for i in range(period, len(tr)):
+        a = (a * (period - 1) + tr[i]) / period
+        out[i] = a
+    return out
+
+
+def _v2_sig(i, cl, hi, lo, ef, es, at, ts):
+    # 15m pullback-then-breakout, trend + angle + ATR-band + session filters
+    hour = time.gmtime(ts[i] // 1000).tm_hour
+    if not (7 <= hour <= 20):
+        return None
+    v = at[i] / cl[i]
+    if not (0.0008 < v < 0.005):
+        return None
+    if ef[i] > es[i] and ef[i] > ef[i - 3]:
+        if min(lo[i - 2], lo[i - 1]) <= ef[i - 1] and cl[i] > hi[i - 1]:
+            return "BUY"
+    if ef[i] < es[i] and ef[i] < ef[i - 3]:
+        if max(hi[i - 2], hi[i - 1]) >= ef[i - 1] and cl[i] < lo[i - 1]:
+            return "SELL"
+    return None
+
+
+def v2_report():
+    """CASE STUDY paper-tracker (NOT real trading): v2 trend-following on 15m,
+    ATR TP/SL (12x/2.5x), rule = stop the week at +10% or -12% on a $1500 base.
+    Reports the last ~7 days. Env: V2_BASE(1500)."""
+    sym = FUT_SYMBOL
+    url = (f"https://api.bitget.com/api/v2/mix/market/candles?symbol={sym}"
+           f"&productType={PRODUCT}&granularity=15m&limit=1000")
+    with urllib.request.urlopen(url, timeout=20) as resp:
+        rows = (json.load(resp).get("data") or [])
+    if len(rows) < 100:
+        print("v2: no data")
+        return
+    ts = [int(r[0]) for r in rows]
+    hi = [float(r[2]) for r in rows]
+    lo = [float(r[3]) for r in rows]
+    cl = [float(r[4]) for r in rows]
+    ef, es, at = ema(cl, 14), ema(cl, 24), atr(hi, lo, cl)
+    base = float(os.environ.get("V2_BASE", "1500"))
+    eq, ended, taken, wins = base, None, 0, 0
+    i = max(30, len(cl) - 672)               # ~ last 7 days of 15m
+    while i < len(cl) - 1 and ended is None:
+        s = _v2_sig(i, cl, hi, lo, ef, es, at, ts)
+        if s not in ("BUY", "SELL"):
+            i += 1
+            continue
+        entry, a = cl[i], at[i]
+        sl_d, tp_d = 2.5 * a, 12.0 * a
+        tp = entry + tp_d if s == "BUY" else entry - tp_d
+        sl = entry - sl_d if s == "BUY" else entry + sl_d
+        out, j = None, i + 1
+        while j < len(cl):
+            htp = hi[j] >= tp if s == "BUY" else lo[j] <= tp
+            hsl = lo[j] <= sl if s == "BUY" else hi[j] >= sl
+            if hsl:
+                out = "SL"
+                break
+            if htp:
+                out = "TP"
+                break
+            j += 1
+        if out is None:
+            break
+        eq += (tp_d if out == "TP" else -sl_d) - 0.30
+        taken += 1
+        wins += out == "TP"
+        if eq - base >= 0.10 * base:
+            ended = "TARGET +10%"
+        elif eq - base <= -0.12 * base:
+            ended = "STOP -12%"
+        i = j + 1
+    ended = ended or "chay het tuan"
+    pct = (eq - base) / base * 100
+    title = "XAU v2 case study (tuan)"
+    body = (f"{taken} lenh, {wins} TP | {ended} | {pct:+.1f}% tren ${base:.0f}\n"
+            f"(PAPER case study - KHONG tien that)")
+    print(title + "\n" + body)
+    push_phone(title, body, actionable=False, prio="low")
+
+
 def _parse_news(raw):
     out = []
     for e in raw:
@@ -540,6 +627,8 @@ if __name__ == "__main__":
         daily_summary()
     elif "--paper" in sys.argv:
         paper_run()
+    elif "--v2" in sys.argv:
+        v2_report()
     elif "--sim" in sys.argv:
         nums = [int(a) for a in sys.argv if a.isdigit()]
         run_sim(nums[0] if nums else 7, forced="--forced" in sys.argv)
