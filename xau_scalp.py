@@ -415,9 +415,10 @@ def sim_account(trades, price, start=None):
     goal = float(os.environ.get("GOAL", "100"))
     risk_pct = float(os.environ.get("RISK_PCT", "2")) / 100
     fee_pct = float(os.environ.get("FEE_PCT", "0.06")) / 100
+    lot = os.environ.get("LOT")   # e.g. "0.01": fixed lot (1.0 lot = 100oz = $100/pt); overrides risk%
     peak, maxdd, hit, fees_paid = acct, 0.0, None, 0.0
     for k, (_, out) in enumerate(trades, 1):
-        per_pt = (acct * risk_pct) / SL          # $ risked per point
+        per_pt = float(lot) * 100 if lot else (acct * risk_pct) / SL  # $ per point
         fee = per_pt * price * fee_pct * 2       # open + close
         fees_paid += fee
         acct += (TP if out == "TP" else -SL) * per_pt - fee

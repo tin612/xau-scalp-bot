@@ -11,3 +11,4 @@ jobs:
       - run: python3 xau_scalp.py --daily
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          LOT: "0.01"
